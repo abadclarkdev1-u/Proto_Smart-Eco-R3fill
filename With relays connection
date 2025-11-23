@@ -1,0 +1,338 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "HX711.h"
+#include <Servo.h>
+
+// --- I2C LCD (16x2) ---
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// --- HX711 Pins ---
+#define LOADCELL_DOUT_PIN A0  // White wire
+#define LOADCELL_SCK_PIN A1   // Green wire
+
+// --- Ultrasonic Sensor Pins ---
+#define TRIG_PIN 7  // Yellow wire
+#define ECHO_PIN 6  // Violet wire
+
+// --- Inductive Sensor Pin ---
+const int inductivePin = 5;  // Black wire (NPN sensor, LOW = metal detected)
+
+// --- Buzzer Pin ---
+const int buzzerPin = 9;  // Red wire
+
+// --- Servo Pins ---
+const int rejectServoPin = 11;  // Reject gate servo (yellow wire)
+const int doorServoPin = 10;    // Door servo for metal items (yellow wire)
+
+// --- Relay Pins ---
+const int relayIN1 = 8;  // Spare/unused
+const int relayCold = 2; // IN2 - Cold water valve control
+const int relayHot = 3;  // IN3 - Hot water valve control
+
+// --- Objects ---
+HX711 scale;
+Servo rejectServo;
+Servo doorServo;
+
+// --- Calibration ---
+float calibration_factor = -7050.0;  // Replace with your actual calibration factor
+
+// --- Detection Settings ---
+const float weightThreshold = 20.0;  // Sudden weight increase (grams)
+const unsigned long detectionWindow = 1500;
+const unsigned long cooldownTime = 1500;
+
+unsigned long cooldownStart = 0;
+bool inCooldown = false;
+bool itemProcessing = false;
+
+float lastWeight = 0.0;
+unsigned long itemDetectTime = 0;
+
+// --- Bin Settings ---
+#define BIN_HEIGHT 40  // cm
+#define THRESHOLD 3    // Distance threshold for item detection
+int points = 0;
+long prevDistance = 0;
+
+// --- Countdown Variables ---
+unsigned long countdownStart = 0;
+unsigned long countdownDuration = 13000;  // 13 seconds (was 10+3)
+bool isCountingDown = false;
+bool isTrigger = false;
+
+void setup() {
+  Serial.begin(9600);
+
+  // --- LCD Setup ---
+  lcd.init();
+  lcd.backlight();
+  showIdleScreen();
+
+  // --- HX711 Setup ---
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(calibration_factor);
+  scale.tare();
+
+  // --- Ultrasonic Sensor ---
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // --- Inductive Sensor ---
+  pinMode(inductivePin, INPUT_PULLUP);  // NPN sensor with pull-up
+
+  // --- Buzzer ---
+  pinMode(buzzerPin, OUTPUT);
+  digitalWrite(buzzerPin, LOW);
+
+  // --- Servos ---
+  rejectServo.attach(rejectServoPin);
+  rejectServo.write(0);  // Initial position
+
+  doorServo.attach(doorServoPin);
+  doorServo.write(0);  // Door closed
+
+  // --- Relays ---
+  pinMode(relayIN1, OUTPUT);
+  pinMode(relayCold, OUTPUT);
+  pinMode(relayHot, OUTPUT);
+  
+  // Relays OFF initially (active LOW for most relay modules)
+  digitalWrite(relayIN1, HIGH);
+  digitalWrite(relayCold, HIGH);
+  digitalWrite(relayHot, HIGH);
+
+  Serial.println("System Ready!");
+}
+
+void loop() {
+  SensorStatus();
+
+  if (isTrigger && !isCountingDown) {
+    startCountdown();
+  } else if (!isCountingDown) {
+    showIdleScreen();
+  }
+
+  countDown();
+  checkInductiveSensor();
+
+  delay(200);
+}
+
+// --- IDLE SCREEN ---
+void showIdleScreen() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Eco-R3fill");
+  lcd.setCursor(0, 1);
+  lcd.print("Pls, insert item");
+}
+
+// --- GET DISTANCE FROM ULTRASONIC ---
+long getDistance() {
+  // Send 10µs pulse to trigger
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // Read echo pulse duration
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);  // Timeout 30ms
+
+  // Calculate distance in cm
+  long distance = duration * 0.034 / 2;
+
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // Limit to bin height
+  if (distance > BIN_HEIGHT || distance == 0) {
+    distance = BIN_HEIGHT;
+  }
+
+  return distance;
+}
+
+// --- DETECT ITEM INSERTION ---
+void SensorStatus() {
+  long currentDistance = getDistance();
+  
+  // If distance decreased (item inserted)
+  if (prevDistance - currentDistance > THRESHOLD) {
+    isTrigger = true;
+    Serial.println("Item detected! Starting countdown...");
+  }
+
+  prevDistance = currentDistance;
+}
+
+// --- PROCESS INPUT DURING COUNTDOWN ---
+void ProcessInput() {
+  long currentDistance = getDistance();
+  
+  // Count each new item
+  if (prevDistance - currentDistance > THRESHOLD) {
+    points++;
+    beep(100);  // Short beep for each item
+    Serial.print("New item added! Points: ");
+    Serial.println(points);
+  }
+
+  prevDistance = currentDistance;
+}
+
+// --- COUNTDOWN LOGIC ---
+void countDown() {
+  if (isCountingDown) {
+    unsigned long elapsed = millis() - countdownStart;
+    int remaining = (countdownDuration - elapsed) / 1000;
+
+    // Display countdown
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Points: ");
+    lcd.print(points);
+    lcd.setCursor(0, 1);
+    lcd.print("Time: ");
+    lcd.print(remaining);
+    lcd.print("s");
+
+    Serial.print("Countdown: ");
+    Serial.println(remaining);
+
+    // Countdown finished
+    if (elapsed >= countdownDuration) {
+      Serial.println("Countdown finished!");
+      
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Your Points: ");
+      lcd.print(points);
+      
+      isCountingDown = false;
+      isTrigger = false;
+      
+      delay(3000);
+      PointsReward();
+      
+      // Reset for next round
+      points = 0;
+      prevDistance = getDistance();
+    }
+
+    // Continue processing items during countdown
+    if (isCountingDown) {
+      ProcessInput();
+    }
+  }
+}
+
+// --- POINTS REWARD (WATER DISPENSING) ---
+void PointsReward() {
+  if (points <= 0) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("No items!");
+    lcd.setCursor(0, 1);
+    lcd.print("Try again!");
+    beep(200);
+    delay(2000);
+    return;
+  }
+
+  // Calculate water amount based on points
+  int waterTime = points * 500;  // 500ms per point (adjust as needed)
+  if (waterTime > 5000) waterTime = 5000;  // Max 5 seconds
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Dispensing...");
+  lcd.setCursor(0, 1);
+  lcd.print(points);
+  lcd.print(" items!");
+
+  // Dispense water (choose hot or cold based on your logic)
+  // For now, dispense cold water
+  digitalWrite(relayCold, LOW);  // Relay ON (active LOW)
+  beep(100);
+  delay(waterTime);
+  digitalWrite(relayCold, HIGH);  // Relay OFF
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Done! Thank you");
+  delay(2000);
+}
+
+// --- START COUNTDOWN ---
+void startCountdown() {
+  countdownStart = millis();
+  isCountingDown = true;
+  points = 0;  // Reset points
+  
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Game Started!");
+  beep(150);
+  delay(1000);
+}
+
+// --- CHECK INDUCTIVE SENSOR FOR METAL ---
+void checkInductiveSensor() {
+  // NPN sensor: LOW = metal detected
+  if (digitalRead(inductivePin) == LOW) {
+    Serial.println("Metal detected!");
+    
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Metal detected!");
+    lcd.setCursor(0, 1);
+    lcd.print("Opening door...");
+    
+    // Open door servo
+    doorServo.write(90);
+    beep(200);
+    delay(2000);
+    doorServo.write(0);  // Close door
+    
+    delay(1000);
+  }
+}
+
+// --- REJECT ITEM (SERVO) ---
+void rejectItem() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Rejected!");
+  lcd.setCursor(0, 1);
+  lcd.print("Try again!");
+  
+  rejectServo.write(90);
+  beep(200);
+  delay(700);
+  rejectServo.write(0);
+}
+
+// --- BUZZER BEEP ---
+void beep(int duration) {
+  digitalWrite(buzzerPin, HIGH);
+  delay(duration);
+  digitalWrite(buzzerPin, LOW);
+}
+
+// --- DISPENSE HOT WATER ---
+void dispenseHotWater(int duration) {
+  digitalWrite(relayHot, LOW);  // Relay ON
+  delay(duration);
+  digitalWrite(relayHot, HIGH);  // Relay OFF
+}
+
+// --- DISPENSE COLD WATER ---
+void dispenseColdWater(int duration) {
+  digitalWrite(relayCold, LOW);  // Relay ON
+  delay(duration);
+  digitalWrite(relayCold, HIGH);  // Relay OFF
+}

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "author": "SANGOL ROGER MOORE A.",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-arduino-uno", "id": "uno", "top": -287.4, "left": -202.2, "attrs": {} },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": 54.4,
+      "left": -167.2,
+      "attrs": { "pins": "i2c" }
+    },
+    {
+      "type": "wokwi-hx711",
+      "id": "cell1",
+      "top": -141.4,
+      "left": 137,
+      "attrs": { "type": "5kg" }
+    },
+    { "type": "wokwi-servo", "id": "servo1", "top": -424.4, "left": -38.4, "attrs": {} },
+    {
+      "type": "wokwi-buzzer",
+      "id": "bz1",
+      "top": -314.4,
+      "left": 203.4,
+      "attrs": { "volume": "0.1" }
+    },
+    {
+      "type": "wokwi-hc-sr04",
+      "id": "ultrasonic1",
+      "top": -516.9,
+      "left": 322.3,
+      "attrs": { "distance": "27" }
+    }
+  ],
+  "connections": [
+    [ "lcd1:GND", "uno:GND.1", "black", [ "h0" ] ],
+    [ "lcd1:VCC", "uno:5V", "red", [ "h0" ] ],
+    [ "lcd1:SDA", "uno:A4", "green", [ "h0" ] ],
+    [ "lcd1:SCL", "uno:A5", "green", [ "h240", "v365.1" ] ],
+    [ "cell1:VCC", "uno:5V", "red", [ "h0" ] ],
+    [ "uno:5V", "servo1:V+", "red", [ "v0" ] ],
+    [ "uno:GND.1", "servo1:GND", "black", [ "v0" ] ],
+    [ "servo1:PWM", "uno:9", "green", [ "h0" ] ],
+    [ "cell1:DT", "uno:A0", "yellow", [ "h0" ] ],
+    [ "cell1:SCK", "uno:A1", "green", [ "h0" ] ],
+    [ "cell1:GND", "uno:GND.1", "black", [ "h316.8", "v95.7" ] ],
+    [ "bz1:1", "uno:8", "purple", [ "v0" ] ],
+    [ "bz1:2", "uno:GND.1", "green", [ "v0" ] ],
+    [ "ultrasonic1:VCC", "uno:5V", "red", [ "v211.2", "h-201.6" ] ],
+    [ "ultrasonic1:GND", "uno:GND.3", "black", [ "v115.2", "h-298.8" ] ],
+    [ "ultrasonic1:TRIG", "uno:7", "green", [ "v48", "h-221.2" ] ],
+    [ "ultrasonic1:ECHO", "uno:6", "green", [ "v67.2", "h-202.4" ] ]
+  ],
+  "dependencies": {}
+}
